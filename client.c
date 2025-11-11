@@ -1,17 +1,42 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
-#define BUFFER_SIZE 4096;
+#define BUFFER_SIZE 4096
+
+int client_sock = -1;
 
 void handle_connect(char *ip, char *port, char *user)
 {
-    printf("conectare");
+    struct sockaddr_in server_addr;
+    client_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_sock < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(atoi(port));
+    if (inet_pton(AF_INET, ip, &server_addr.sin_addr) <= 0) {
+        perror("inet_pton");
+        close(client_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    if (connect(client_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("connect");
+        close(client_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    send(client_sock, user, strlen(user), 0);
+
+    printf("Connected to server as %s\n", user);
 }
-void handle_submit(char *file_path)
-{
-    printf("sumit");
-}
+
 void handle_status(char *job_id)
 {
     printf("status");
