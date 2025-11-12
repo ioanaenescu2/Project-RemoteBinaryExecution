@@ -37,18 +37,61 @@ void handle_connect(char *ip, char *port, char *user)
     printf("Connected to server as %s\n", user);
 }
 
+void handle_submit(char *file_path)
+{
+    if (client_sock < 0) {
+        printf("Not connected to server!\n");
+        return;
+    }
+
+    char cmd[] = "SUBMIT";
+    send(client_sock, cmd, sizeof(cmd), 0);
+
+    FILE *f = fopen(file_path, "rb");
+    if (!f) {
+        perror("fopen");
+        return;
+    }
+
+    send(client_sock, file_path, strlen(file_path) + 1, 0);
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    send(client_sock, &file_size, sizeof(file_size), 0);
+
+    char buffer[BUFFER_SIZE];
+    long sent = 0;
+    while (sent < file_size) {
+        size_t bytes = fread(buffer, 1, BUFFER_SIZE, f);
+        if (bytes <= 0) break;
+        send(client_sock, buffer, bytes, 0);
+        sent += bytes;
+    }
+    fclose(f);
+
+    char job_id[64] = {0};
+    recv(client_sock, job_id, sizeof(job_id), 0); 
+    printf("Job submitted! ID: %s\n", job_id);
+}
+
 void handle_status(char *job_id)
 {
     printf("status");
 }
+
 void handle_fetch(char *job_id)
 {
     printf("fetch");
 }
+
 void handle_exit()
 {
+    if (client_sock >= 0) {
+        close(client_sock);
+        client_sock = -1;
+    }
     printf("Disconnected. Goodbye!\n");
-    
     exit(EXIT_SUCCESS);
 }
 
@@ -67,7 +110,6 @@ int main(int argc, char **argv)
         }
 
         line[strcspn(line, "\n")]=0;
-        //printf("%s \n", line);
 
         char *command=strtok(line, " ");
         if(!command)
