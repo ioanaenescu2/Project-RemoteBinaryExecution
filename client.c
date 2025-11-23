@@ -95,10 +95,22 @@ void handle_exit()
     exit(EXIT_SUCCESS);
 }
 
+void print_menu()
+{
+    printf("\nClient commands:\n");
+    printf("  connect <IP> <PORT> <USER_NAME>   : Connect to server\n");
+    printf("  submit <FILE_PATH>               : Submit a file for execution\n");
+    printf("  status <JOB_ID>                  : Check job status\n");
+    printf("  fetch <JOB_ID>                   : Fetch job result\n");
+    printf("  exit                             : Disconnect and exit\n");
+    printf("  help                             : Show this menu\n\n");
+}
+
 int main(int argc, char **argv)
 {
     char line[512];
-    printf("Remote Executor Client \n\n");
+    printf("Remote Executor Client \n");
+    print_menu();
 
     while(1)
     {
@@ -170,6 +182,10 @@ int main(int argc, char **argv)
         else if((strcmp(command, "exit")) == 0)
         {
             handle_exit();
+        }
+        else if((strcmp(command, "help")) == 0)
+        {
+            print_menu();
         }
         else
         {
