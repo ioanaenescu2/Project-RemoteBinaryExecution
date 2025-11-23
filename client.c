@@ -4,10 +4,26 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <stdint.h>
 
 #define BUFFER_SIZE 4096
 
 int client_sock = -1;
+
+static uint32_t sum_file(FILE *f)
+{
+    if (!f) return 0;
+    uint32_t sum = 0;
+    unsigned char buffer[BUFFER_SIZE];
+    size_t r;
+    rewind(f);
+    while ((r = fread(buffer, 1, sizeof(buffer), f)) > 0) {
+        for (size_t i = 0; i < r; ++i) {
+            sum += buffer[i];
+        }
+    }
+    return sum;
+}
 
 void handle_connect(char *ip, char *port, char *user)
 {
@@ -45,7 +61,10 @@ void handle_submit(char *file_path)
     }
 
     char cmd[] = "SUBMIT";
-    send(client_sock, cmd, sizeof(cmd), 0);
+    if (send(client_sock, cmd, sizeof(cmd), 0) <= 0) {
+        perror("send");
+        return;
+    }
 
     FILE *f = fopen(file_path, "rb");
     if (!f) {
@@ -53,26 +72,58 @@ void handle_submit(char *file_path)
         return;
     }
 
-    send(client_sock, file_path, strlen(file_path) + 1, 0);
+    if (send(client_sock, file_path, strlen(file_path) + 1, 0) <= 0) {
+        perror("send filename");
+        fclose(f);
+        return;
+    }
 
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    send(client_sock, &file_size, sizeof(file_size), 0);
 
+    if (send(client_sock, &file_size, sizeof(file_size), 0) <= 0) {
+        perror("send size");
+        fclose(f);
+        return;
+    }
+
+    uint32_t sum = sum_file(f);
+    uint32_t sum_net = htonl(sum);
+    if (send(client_sock, &sum_net, sizeof(sum_net), 0) <= 0) {
+        perror("send checksum");
+        fclose(f);
+        return;
+    }
+
+    rewind(f);
     char buffer[BUFFER_SIZE];
     long sent = 0;
     while (sent < file_size) {
         size_t bytes = fread(buffer, 1, BUFFER_SIZE, f);
         if (bytes <= 0) break;
-        send(client_sock, buffer, bytes, 0);
+        if (send(client_sock, buffer, bytes, 0) <= 0) {
+            perror("send file");
+            break;
+        }
         sent += bytes;
     }
     fclose(f);
 
     char job_id[64] = {0};
-    recv(client_sock, job_id, sizeof(job_id), 0); 
-    printf("Job submitted! ID: %s\n", job_id);
+    ssize_t r = recv(client_sock, job_id, sizeof(job_id) - 1, 0);
+    if (r <= 0) {
+        printf("No response from server\n");
+        return;
+    }
+    job_id[r] = '\0';
+
+    if (strncmp(job_id, "ERR", 3) == 0) {
+        printf("Server error: %s\n", job_id);
+    } else {
+        printf("Job submitted! ID: %s\n", job_id);
+    }
+    
 }
 
 void handle_status(char *job_id)
