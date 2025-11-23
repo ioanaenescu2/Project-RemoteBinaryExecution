@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <stdint.h>
 
 #define PORT 12345
 
@@ -42,16 +43,17 @@ static int recv_cstring(int sock, char *buf, size_t maxlen) {
 }
 
 void handle_client(int client_sock) {
-    printf("Client connected!\n");
-
     char user[64] = {0};
     ssize_t user_len = recv(client_sock, user, sizeof(user) - 1, 0);
     if (user_len > 0) {
         user[user_len] = '\0';
+        printf("Client connected: %s\n", user);
     } else {
         close(client_sock);
         return;
     }
+
+    static int job_counter = 0;
 
     while (1) {
         char cmd7[7];
@@ -78,6 +80,12 @@ void handle_client(int client_sock) {
             break;
         }
 
+        uint32_t net_cs = 0;
+        if (!recv_all(client_sock, &net_cs, sizeof(net_cs))) {
+            break;
+        }
+        uint32_t expected_cs = ntohl(net_cs);
+
         FILE *f = fopen(save_name, "wb");
         if (!f) {
             perror("fopen");
@@ -86,6 +94,7 @@ void handle_client(int client_sock) {
 
         long remaining = file_size;
         char buffer[4096];
+        uint32_t calc_cs = 0;
         while (remaining > 0) {
             size_t chunk = (remaining > (long)sizeof(buffer)) ? sizeof(buffer) : (size_t)remaining;
             ssize_t r = recv(client_sock, buffer, chunk, 0);
@@ -94,16 +103,32 @@ void handle_client(int client_sock) {
                 remove(save_name);
                 goto done;
             }
+            for (ssize_t i = 0; i < r; ++i) {
+                calc_cs += (uint8_t)buffer[i];
+            }
             fwrite(buffer, 1, (size_t)r, f);
             remaining -= (long)r;
         }
         fclose(f);
 
-        const char *job_id = "job1";
+        if (calc_cs != expected_cs) {
+            printf("Checksum mismatch for %s (expected %u got %u)\n", save_name, expected_cs, calc_cs);
+            const char *err = "BAD_CHECKSUM";
+            send(client_sock, err, strlen(err) + 1, 0);
+            remove(save_name);
+            continue;
+        }
+
+        printf("File received successfully: %s (%ld bytes, checksum OK)\n", save_name, file_size);
+
+        job_counter++;
+        char job_id[64];
+        snprintf(job_id, sizeof(job_id), "File received - job%d", job_counter);
         send(client_sock, job_id, strlen(job_id) + 1, 0);
     }
 
 done:
+    printf("Client disconnected: %s\n", user);
     close(client_sock);
 }
 
