@@ -10,6 +10,31 @@
 
 int client_sock = -1;
 
+static ssize_t recv_all(int sock, void *buf, size_t len)
+{
+    size_t total = 0;
+    while (total < len) {
+        ssize_t r = recv(sock, (char *)buf + total, len - total, 0);
+        if (r <= 0) return r; 
+        total += (size_t)r;
+    }
+    return (ssize_t)total;
+}
+
+static int recv_cstring(int sock, char *buf, size_t maxlen)
+{
+    size_t i = 0;
+    while (i + 1 < maxlen) {
+        char c;
+        ssize_t r = recv(sock, &c, 1, 0);
+        if (r <= 0) return 0;
+        buf[i++] = c;
+        if (c == '\0') return 1;
+    }
+    buf[maxlen - 1] = '\0';
+    return 0;
+}
+
 static uint32_t sum_file(FILE *f)
 {
     if (!f) return 0;
@@ -128,12 +153,118 @@ void handle_submit(char *file_path)
 
 void handle_status(char *job_id)
 {
-    printf("status");
+    if (client_sock < 0) {
+        printf("Not connected to server!\n");
+        return;
+    }
+
+    const char cmd[] = "STATUS";
+    if (send(client_sock, cmd, sizeof(cmd), 0) <= 0) {
+        perror("send STATUS");
+        return;
+    }
+
+    size_t jid_len = strlen(job_id) + 1;
+    if (send(client_sock, job_id, jid_len, 0) <= 0) {
+        perror("send job_id");
+        return;
+    }
+
+    char status[64] = {0};
+    ssize_t r = recv(client_sock, status, sizeof(status) - 1, 0);
+    if (r <= 0) {
+        printf("No response from server\n");
+        return;
+    }
+    status[r] = '\0';
+
+    printf("Status for job %s: %s\n", job_id, status);
 }
 
 void handle_fetch(char *job_id)
 {
-    printf("fetch");
+    if (client_sock < 0) {
+        printf("Not connected to server!\n");
+        return;
+    }
+
+    const char cmd[] = "FETCH";
+    if (send(client_sock, cmd, sizeof(cmd), 0) <= 0) {
+        perror("send FETCH");
+        return;
+    }
+
+    size_t jid_len = strlen(job_id) + 1;
+    if (send(client_sock, job_id, jid_len, 0) <= 0) {
+        perror("send job_id");
+        return;
+    }
+
+    char peek[16] = {0};
+    ssize_t pr = recv(client_sock, peek, sizeof(peek), MSG_PEEK);
+    if (pr > 0 && peek[0] == 'N') {
+        char msg[32];
+        if (recv_cstring(client_sock, msg, sizeof(msg))) {
+            if (strcmp(msg, "NOT_READY") == 0) {
+                printf("Job %s is not ready yet.\n", job_id);
+                return;
+            }
+        }
+    }
+
+    int exit_code = 0;
+    if (recv_all(client_sock, &exit_code, sizeof(exit_code)) <= 0) {
+        printf("Failed to receive return code\n");
+        return;
+    }
+
+    long stdout_len = 0;
+    if (recv_all(client_sock, &stdout_len, sizeof(stdout_len)) <= 0) {
+        printf("Failed to receive stdout size\n");
+        return;
+    }
+    char *stdout_buf = NULL;
+    if (stdout_len > 0) {
+        if (stdout_len > 100000000) { printf("Stdout too large\n"); return; }
+        stdout_buf = (char *)malloc((size_t)stdout_len + 1);
+        if (!stdout_buf) { printf("Memory allocation failed for stdout\n"); return; }
+        if (recv_all(client_sock, stdout_buf, (size_t)stdout_len) <= 0) {
+            printf("Failed to receive stdout data\n");
+            free(stdout_buf);
+            return;
+        }
+        stdout_buf[stdout_len] = '\0';
+    }
+
+    long stderr_len = 0;
+    if (recv_all(client_sock, &stderr_len, sizeof(stderr_len)) <= 0) {
+        printf("Failed to receive stderr size\n");
+        free(stdout_buf);
+        return;
+    }
+    char *stderr_buf = NULL;
+    if (stderr_len > 0) {
+        if (stderr_len > 100000000) { printf("Stderr too large\n"); free(stdout_buf); return; }
+        stderr_buf = (char *)malloc((size_t)stderr_len + 1);
+        if (!stderr_buf) { printf("Memory allocation failed for stderr\n"); free(stdout_buf); return; }
+        if (recv_all(client_sock, stderr_buf, (size_t)stderr_len) <= 0) {
+            printf("Failed to receive stderr data\n");
+            free(stdout_buf);
+            free(stderr_buf);
+            return;
+        }
+        stderr_buf[stderr_len] = '\0';
+    }
+
+    printf("Job %s completed. Return code: %d\n", job_id, exit_code);
+    printf("--- STDOUT ---\n");
+    if (stdout_buf) printf("%s", stdout_buf);
+    printf("\n--- STDERR ---\n");
+    if (stderr_buf) printf("%s", stderr_buf);
+    printf("\n");
+
+    free(stdout_buf);
+    free(stderr_buf);
 }
 
 void handle_exit()
